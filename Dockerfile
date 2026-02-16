@@ -21,11 +21,14 @@ COPY cfms/backend /app/cfms/backend
 COPY --from=frontend-builder /app/cfms/frontend/cfms_frontend/build /tmp/frontend-build
 
 RUN mkdir -p /app/cfms/backend/static /app/cfms/backend/templates \
-    && cp -r /tmp/frontend-build/static /app/cfms/backend/static/frontend \
+    && cp -r /tmp/frontend-build/static/* /app/cfms/backend/static/ \
     && cp /tmp/frontend-build/index.html /app/cfms/backend/templates/index.html \
-    && cp /tmp/frontend-build/asset-manifest.json /app/cfms/backend/static/frontend/asset-manifest.json \
-    && cp /tmp/frontend-build/manifest.json /app/cfms/backend/static/frontend/manifest.json \
-    && cp /tmp/frontend-build/robots.txt /app/cfms/backend/static/frontend/robots.txt
+    && cp /tmp/frontend-build/asset-manifest.json /app/cfms/backend/static/asset-manifest.json \
+    && cp /tmp/frontend-build/manifest.json /app/cfms/backend/static/manifest.json \
+    && cp /tmp/frontend-build/robots.txt /app/cfms/backend/static/robots.txt \
+    && cp /tmp/frontend-build/favicon.ico /app/cfms/backend/static/favicon.ico \
+    && cp /tmp/frontend-build/logo192.png /app/cfms/backend/static/logo192.png \
+    && cp /tmp/frontend-build/logo512.png /app/cfms/backend/static/logo512.png
 
 WORKDIR /app/cfms/backend
 EXPOSE 8000
