@@ -1,0 +1,9 @@
+body {
+  margin: 0;
+  font-family: "Segoe UI", "Trebuchet MS", "Gill Sans", sans-serif;
+  color: #1d2a3b;
+}
+
+* {
+  box-sizing: border-box;
+}
