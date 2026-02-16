@@ -2,7 +2,7 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /app/cfms/frontend/cfms_frontend
 
 COPY cfms/frontend/cfms_frontend/package.json cfms/frontend/cfms_frontend/package-lock.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 
 COPY cfms/frontend/cfms_frontend/ ./
 RUN npm run build
