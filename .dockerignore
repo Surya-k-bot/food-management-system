@@ -1,0 +1,16 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+node_modules
+cfms/frontend/cfms_frontend/node_modules
+
+cfms/backend/.env
+cfms/backend/db.sqlite3
+*.sqlite3
+
+.zencoder
+.zenflow
