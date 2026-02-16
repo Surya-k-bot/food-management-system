@@ -21,15 +21,27 @@ def load_env_file(file_path: Path) -> None:
 
 load_env_file(BASE_DIR / '.env')
 
+
+def env_bool(name: str, default: bool) -> bool:
+    return os.getenv(name, str(default)).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
 SECRET_KEY = os.getenv(
     'SECRET_KEY',
     'django-insecure-j*gi-2-#ud5n1@h5$wp(z&b*cv@g4n-s57e6fni)_cru54!z5a',
 )
 
-DEBUG = os.getenv('DEBUG', 'True').strip().lower() in ('1', 'true', 'yes', 'on')
+DEBUG = env_bool('DEBUG', False)
 
-raw_allowed_hosts = os.getenv('ALLOWED_HOSTS', '*').strip()
-ALLOWED_HOSTS = [host.strip() for host in raw_allowed_hosts.split(',') if host.strip()]
+raw_allowed_hosts = os.getenv('ALLOWED_HOSTS', '').strip()
+if raw_allowed_hosts:
+    ALLOWED_HOSTS = [host.strip() for host in raw_allowed_hosts.split(',') if host.strip()]
+else:
+    ALLOWED_HOSTS = ['127.0.0.1', 'localhost', '.onrender.com']
+
+render_hostname = os.getenv('RENDER_EXTERNAL_HOSTNAME', '').strip()
+if render_hostname and render_hostname not in ALLOWED_HOSTS:
+    ALLOWED_HOSTS.append(render_hostname)
 
 INSTALLED_APPS = [
     'django.contrib.admin',
