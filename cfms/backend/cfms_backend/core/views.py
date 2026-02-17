@@ -1,5 +1,6 @@
 import json
 
+from django.contrib.auth import authenticate, login
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -69,3 +70,34 @@ def food_items(request):
         )
 
     return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))
+
+
+@csrf_exempt
+def auth_login(request):
+    if request.method == 'OPTIONS':
+        return _cors(JsonResponse({}, status=200))
+
+    if request.method != 'POST':
+        return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))
+
+    try:
+        payload = json.loads(request.body.decode('utf-8'))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return _cors(JsonResponse({'error': 'Invalid JSON body.'}, status=400))
+
+    username = str(payload.get('username', '')).strip()
+    password = str(payload.get('password', ''))
+
+    if not username or not password:
+        return _cors(JsonResponse({'error': 'Username and password are required.'}, status=400))
+
+    user = authenticate(request, username=username, password=password)
+    if not user:
+        return _cors(JsonResponse({'error': 'Invalid credentials.'}, status=401))
+
+    if not user.is_active:
+        return _cors(JsonResponse({'error': 'This account is inactive.'}, status=403))
+
+    login(request, user)
+    role = 'admin' if user.is_staff or user.is_superuser else 'student'
+    return _cors(JsonResponse({'username': user.username, 'role': role}, status=200))

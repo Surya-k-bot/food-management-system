@@ -9,30 +9,53 @@ type FoodItem = {
   created_at: string;
 };
 
+type UserRole = 'student' | 'admin';
+
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL ?? '';
 const API_URL = `${API_BASE_URL}/api/food-items/`;
+const LOGIN_URL = `${API_BASE_URL}/api/auth/login/`;
+
+const readJsonSafely = async (response: Response): Promise<any | null> => {
+  const text = await response.text();
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+};
 
 function App() {
   const [items, setItems] = useState<FoodItem[]>([]);
   const [name, setName] = useState('');
-  const [category, setCategory] = useState('');
+  const [category, setCategory] = useState('morning');
   const [quantity, setQuantity] = useState('1');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [activeCategory, setActiveCategory] = useState('All');
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string>('');
+
+  const [role, setRole] = useState<UserRole | null>(null);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
+  const [loginLoading, setLoginLoading] = useState(false);
 
   const loadItems = async () => {
     setLoading(true);
     setError('');
     try {
       const response = await fetch(API_URL);
+      const data = await readJsonSafely(response);
       if (!response.ok) {
-        throw new Error('Unable to load food items.');
+        throw new Error(data?.error ?? 'Unable to load food items.');
       }
-      const data = await response.json();
+      if (!data) {
+        throw new Error('Backend returned an invalid response.');
+      }
       setItems(data.items ?? []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
@@ -50,6 +73,38 @@ function App() {
     loadItems();
   }, []);
 
+  const handleLogin = async (event: FormEvent) => {
+    event.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const response = await fetch(LOGIN_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+        }),
+      });
+      const data = await readJsonSafely(response);
+
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Login failed.');
+      }
+
+      if (!data || (data.role !== 'student' && data.role !== 'admin')) {
+        throw new Error('Invalid login response from backend.');
+      }
+
+      setRole(data.role as UserRole);
+      setPassword('');
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : 'Unexpected login error.');
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
@@ -66,16 +121,19 @@ function App() {
         }),
       });
 
-      const data = await response.json();
+      const data = await readJsonSafely(response);
 
       if (!response.ok) {
-        throw new Error(data.error ?? 'Unable to create item.');
+        throw new Error(data?.error ?? 'Unable to create item.');
+      }
+      if (!data) {
+        throw new Error('Backend returned an invalid response.');
       }
 
       setItems((previous) => [data as FoodItem, ...previous]);
       setLastUpdated(new Date().toLocaleTimeString());
       setName('');
-      setCategory('');
+      setCategory('morning');
       setQuantity('1');
     } catch (err) {
       if (err instanceof TypeError) {
@@ -88,53 +146,141 @@ function App() {
     }
   };
 
-  const categories = useMemo(() => {
-    const unique = new Set(items.map((item) => item.category));
-    return ['All', ...Array.from(unique).sort((a, b) => a.localeCompare(b))];
-  }, [items]);
-
-  const filteredItems = useMemo(() => {
-    const query = searchTerm.trim().toLowerCase();
-    return items.filter((item) => {
-      const matchesCategory = activeCategory === 'All' || item.category === activeCategory;
-      const matchesSearch =
-        query.length === 0 ||
-        item.name.toLowerCase().includes(query) ||
-        item.category.toLowerCase().includes(query);
-      return matchesCategory && matchesSearch;
-    });
-  }, [items, activeCategory, searchTerm]);
-
   const totalQuantity = useMemo(
     () => items.reduce((sum, item) => sum + item.quantity, 0),
     [items]
   );
 
-  const lowStockCount = useMemo(
-    () => items.filter((item) => item.quantity <= 2).length,
+  const todayDate = new Date().toLocaleDateString();
+
+  const todayMenus = useMemo(() => {
+    const morning = items.filter((item) => item.category.toLowerCase() === 'morning');
+    const lunch = items.filter((item) => item.category.toLowerCase() === 'lunch');
+    const dinner = items.filter((item) => item.category.toLowerCase() === 'dinner');
+    return { morning, lunch, dinner };
+  }, [items]);
+
+  const sortedHistory = useMemo(
+    () => [...items].sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
     [items]
   );
 
+  const renderMenuTable = (title: string, menuItems: FoodItem[]) => (
+    <section className="menu-card">
+      <h3>{title} Food Item List</h3>
+      {menuItems.length === 0 ? (
+        <p className="empty">No items added for {title.toLowerCase()}.</p>
+      ) : (
+        <table>
+          <thead>
+            <tr>
+              <th>Food Item</th>
+              <th>Quantity</th>
+            </tr>
+          </thead>
+          <tbody>
+            {menuItems.map((item) => (
+              <tr key={item.id}>
+                <td>{item.name}</td>
+                <td>{item.quantity}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+
+  if (!role) {
+    return (
+      <main className="app-shell">
+        <section className="panel login-panel">
+          <p className="eyebrow">Campus Canteen</p>
+          <h1>Food Management System</h1>
+          <p className="subtitle">Student/Admin Login</p>
+          <form className="login-form" onSubmit={handleLogin}>
+            <label htmlFor="username">Username</label>
+            <input
+              id="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="student or admin"
+              required
+            />
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Enter password"
+              required
+            />
+            <button type="submit" disabled={loginLoading}>
+              {loginLoading ? 'Logging in...' : 'Login'}
+            </button>
+          </form>
+          <p className="subtitle">Use backend users, e.g. `student` / `student123`, `admin` / `admin123`.</p>
+          {loginError && <p className="error">{loginError}</p>}
+        </section>
+      </main>
+    );
+  }
+
+  if (role === 'student') {
+    return (
+      <main className="app-shell">
+        <section className="panel">
+          <header className="panel-header">
+            <div>
+              <p className="eyebrow">Student Portal</p>
+              <h1>Today Food Menus</h1>
+              <p className="subtitle">Date: {todayDate}</p>
+            </div>
+            <div className="header-actions">
+              <button className="refresh-button" onClick={loadItems} disabled={loading}>
+                {loading ? 'Refreshing...' : 'Refresh'}
+              </button>
+              <button className="ghost-button" onClick={() => setRole(null)}>
+                Logout
+              </button>
+            </div>
+          </header>
+
+          {error && <p className="error">{error}</p>}
+
+          <section className="menu-grid">
+            {renderMenuTable('Morning', todayMenus.morning)}
+            {renderMenuTable('Lunch', todayMenus.lunch)}
+            {renderMenuTable('Dinner', todayMenus.dinner)}
+          </section>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="app-shell">
-      <div className="background-orb orb-1" />
-      <div className="background-orb orb-2" />
-
       <section className="panel">
         <header className="panel-header">
           <div>
-            <p className="eyebrow">Kitchen Inventory</p>
-            <h1>Food Management System</h1>
-            <p className="subtitle">Organize stock, watch shortages, and keep supplies in check.</p>
+            <p className="eyebrow">Admin Portal</p>
+            <h1>History of Food Items</h1>
+            <p className="subtitle">Manage menu entries and review full history.</p>
           </div>
-          <button className="refresh-button" onClick={loadItems} disabled={loading || submitting}>
-            {loading ? 'Refreshing...' : 'Refresh'}
-          </button>
+          <div className="header-actions">
+            <button className="refresh-button" onClick={loadItems} disabled={loading || submitting}>
+              {loading ? 'Refreshing...' : 'Refresh'}
+            </button>
+            <button className="ghost-button" onClick={() => setRole(null)}>
+              Logout
+            </button>
+          </div>
         </header>
 
         <section className="stats-grid">
           <article className="stat-card">
-            <p>Total Items</p>
+            <p>Total Records</p>
             <strong>{items.length}</strong>
           </article>
           <article className="stat-card">
@@ -142,12 +288,8 @@ function App() {
             <strong>{totalQuantity}</strong>
           </article>
           <article className="stat-card">
-            <p>Categories</p>
-            <strong>{categories.length - 1}</strong>
-          </article>
-          <article className="stat-card warning">
-            <p>Low Stock</p>
-            <strong>{lowStockCount}</strong>
+            <p>Updated</p>
+            <strong>{lastUpdated || 'Not yet'}</strong>
           </article>
         </section>
 
@@ -159,18 +301,20 @@ function App() {
               required
               value={name}
               onChange={(event) => setName(event.target.value)}
-              placeholder="Rice, Apple, Milk"
+              placeholder="Rice, Idli, Dal"
             />
           </div>
           <div className="field">
-            <label htmlFor="category">Category</label>
-            <input
+            <label htmlFor="category">Meal Session</label>
+            <select
               id="category"
-              required
               value={category}
               onChange={(event) => setCategory(event.target.value)}
-              placeholder="Grains, Fruits, Dairy"
-            />
+            >
+              <option value="morning">Morning</option>
+              <option value="lunch">Lunch</option>
+              <option value="dinner">Dinner</option>
+            </select>
           </div>
           <div className="field">
             <label htmlFor="quantity">Quantity</label>
@@ -184,53 +328,37 @@ function App() {
             />
           </div>
           <button className="add-button" type="submit" disabled={submitting}>
-            {submitting ? 'Saving...' : 'Add Item'}
+            {submitting ? 'Saving...' : 'Add Food Item'}
           </button>
         </form>
 
-        <section className="toolbar">
-          <input
-            className="search-input"
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            placeholder="Search by name or category"
-          />
-          <select
-            className="category-select"
-            value={activeCategory}
-            onChange={(event) => setActiveCategory(event.target.value)}
-          >
-            {categories.map((itemCategory) => (
-              <option key={itemCategory} value={itemCategory}>
-                {itemCategory}
-              </option>
-            ))}
-          </select>
-          <p className="updated">Updated: {lastUpdated || 'Not yet'}</p>
-        </section>
-
         {error && <p className="error">{error}</p>}
 
-        {loading ? (
-          <p className="placeholder">Loading items...</p>
-        ) : filteredItems.length === 0 ? (
-          <p className="placeholder">No items match this filter.</p>
-        ) : (
-          <ul className="item-list">
-            {filteredItems.map((item) => (
-              <li key={item.id} className="item-card">
-                <div>
-                  <strong>{item.name}</strong>
-                  <p>{item.category}</p>
-                </div>
-                <div className="qty-cell">
-                  <span>Qty: {item.quantity}</span>
-                  {item.quantity <= 2 && <em>Low stock</em>}
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+        <section className="history-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Food Item</th>
+                <th>Session</th>
+                <th>Quantity</th>
+                <th>Created At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sortedHistory.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.name}</td>
+                  <td>{item.category}</td>
+                  <td>{item.quantity}</td>
+                  <td>{new Date(item.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {!loading && sortedHistory.length === 0 && (
+            <p className="empty">No history found.</p>
+          )}
+        </section>
       </section>
     </main>
   );
