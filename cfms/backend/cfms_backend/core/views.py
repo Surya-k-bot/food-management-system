@@ -4,7 +4,7 @@ from django.contrib.auth import authenticate, login
 from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from .models import FoodItem
+from .models import Feedback, FoodItem
 
 
 def _cors(response: JsonResponse) -> JsonResponse:
@@ -101,3 +101,56 @@ def auth_login(request):
     login(request, user)
     role = 'admin' if user.is_staff or user.is_superuser else 'student'
     return _cors(JsonResponse({'username': user.username, 'role': role}, status=200))
+
+
+@csrf_exempt
+def feedback_items(request):
+    if request.method == 'OPTIONS':
+        return _cors(JsonResponse({}, status=200))
+
+    if not request.user.is_authenticated:
+        return _cors(JsonResponse({'error': 'Authentication required.'}, status=401))
+
+    if request.method == 'GET':
+        if not (request.user.is_staff or request.user.is_superuser):
+            return _cors(JsonResponse({'error': 'Admin access required.'}, status=403))
+
+        feedbacks = [
+            {
+                'id': feedback.id,
+                'student_name': feedback.student_name,
+                'message': feedback.message,
+                'created_at': feedback.created_at.isoformat(),
+            }
+            for feedback in Feedback.objects.all()
+        ]
+        return _cors(JsonResponse({'feedbacks': feedbacks}))
+
+    if request.method == 'POST':
+        try:
+            payload = json.loads(request.body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _cors(JsonResponse({'error': 'Invalid JSON body.'}, status=400))
+
+        message = str(payload.get('message', '')).strip()
+        if not message:
+            return _cors(JsonResponse({'error': 'Feedback message is required.'}, status=400))
+
+        feedback = Feedback.objects.create(
+            student_name=request.user.username,
+            message=message,
+        )
+
+        return _cors(
+            JsonResponse(
+                {
+                    'id': feedback.id,
+                    'student_name': feedback.student_name,
+                    'message': feedback.message,
+                    'created_at': feedback.created_at.isoformat(),
+                },
+                status=201,
+            )
+        )
+
+    return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))

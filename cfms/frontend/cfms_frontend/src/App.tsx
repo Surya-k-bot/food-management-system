@@ -9,11 +9,20 @@ type FoodItem = {
   created_at: string;
 };
 
+type FeedbackItem = {
+  id: number;
+  student_name: string;
+  message: string;
+  created_at: string;
+};
+
 type UserRole = 'student' | 'admin';
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL ?? '';
-const API_URL = `${API_BASE_URL}/api/food-items/`;
-const LOGIN_URL = `${API_BASE_URL}/api/auth/login/`;
+const NORMALIZED_BASE_URL = API_BASE_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+const FOOD_URL = `${NORMALIZED_BASE_URL}/api/food-items/`;
+const LOGIN_URL = `${NORMALIZED_BASE_URL}/api/auth/login/`;
+const FEEDBACK_URL = `${NORMALIZED_BASE_URL}/api/feedback/`;
 
 const readJsonSafely = async (response: Response): Promise<any | null> => {
   const text = await response.text();
@@ -30,17 +39,24 @@ const readJsonSafely = async (response: Response): Promise<any | null> => {
 
 function App() {
   const [items, setItems] = useState<FoodItem[]>([]);
+  const [feedbacks, setFeedbacks] = useState<FeedbackItem[]>([]);
+
   const [name, setName] = useState('');
   const [category, setCategory] = useState('morning');
   const [quantity, setQuantity] = useState('1');
+  const [feedbackMessage, setFeedbackMessage] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [feedbackSubmitting, setFeedbackSubmitting] = useState(false);
   const [error, setError] = useState('');
+  const [feedbackStatus, setFeedbackStatus] = useState('');
   const [lastUpdated, setLastUpdated] = useState<string>('');
 
   const [role, setRole] = useState<UserRole | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [currentUser, setCurrentUser] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loginLoading, setLoginLoading] = useState(false);
 
@@ -48,7 +64,7 @@ function App() {
     setLoading(true);
     setError('');
     try {
-      const response = await fetch(API_URL);
+      const response = await fetch(FOOD_URL);
       const data = await readJsonSafely(response);
       if (!response.ok) {
         throw new Error(data?.error ?? 'Unable to load food items.');
@@ -59,13 +75,22 @@ function App() {
       setItems(data.items ?? []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch (err) {
-      if (err instanceof TypeError) {
-        setError('Cannot reach backend API. Start Django server on http://localhost:8000.');
-      } else {
-        setError(err instanceof Error ? err.message : 'Unexpected error.');
-      }
+      setError(err instanceof Error ? err.message : 'Unexpected error.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadFeedbacks = async () => {
+    try {
+      const response = await fetch(FEEDBACK_URL, { credentials: 'include' });
+      const data = await readJsonSafely(response);
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Unable to load feedback.');
+      }
+      setFeedbacks(data?.feedbacks ?? []);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load feedback list.');
     }
   };
 
@@ -73,14 +98,22 @@ function App() {
     loadItems();
   }, []);
 
+  useEffect(() => {
+    if (role === 'admin') {
+      loadFeedbacks();
+    }
+  }, [role]);
+
   const handleLogin = async (event: FormEvent) => {
     event.preventDefault();
     setLoginError('');
     setLoginLoading(true);
+
     try {
       const response = await fetch(LOGIN_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify({
           username: username.trim(),
           password,
@@ -89,7 +122,10 @@ function App() {
       const data = await readJsonSafely(response);
 
       if (!response.ok) {
-        throw new Error(data?.error ?? 'Login failed.');
+        const fallback = response.status === 404
+          ? 'Login endpoint not found. Restart backend and verify latest code is running.'
+          : `Login failed (HTTP ${response.status}).`;
+        throw new Error(data?.error ?? fallback);
       }
 
       if (!data || (data.role !== 'student' && data.role !== 'admin')) {
@@ -97,6 +133,7 @@ function App() {
       }
 
       setRole(data.role as UserRole);
+      setCurrentUser(data.username ?? username.trim());
       setPassword('');
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : 'Unexpected login error.');
@@ -105,13 +142,20 @@ function App() {
     }
   };
 
+  const handleLogout = () => {
+    setRole(null);
+    setCurrentUser('');
+    setLoginError('');
+    setFeedbackStatus('');
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setSubmitting(true);
     setError('');
 
     try {
-      const response = await fetch(API_URL, {
+      const response = await fetch(FOOD_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -136,13 +180,38 @@ function App() {
       setCategory('morning');
       setQuantity('1');
     } catch (err) {
-      if (err instanceof TypeError) {
-        setError('Cannot reach backend API. Start Django server on http://localhost:8000.');
-      } else {
-        setError(err instanceof Error ? err.message : 'Unexpected error.');
-      }
+      setError(err instanceof Error ? err.message : 'Unexpected error.');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleFeedbackSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    setFeedbackStatus('');
+    setFeedbackSubmitting(true);
+
+    try {
+      const response = await fetch(FEEDBACK_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          message: feedbackMessage,
+        }),
+      });
+
+      const data = await readJsonSafely(response);
+      if (!response.ok) {
+        throw new Error(data?.error ?? 'Unable to submit feedback.');
+      }
+
+      setFeedbackStatus('Feedback submitted successfully.');
+      setFeedbackMessage('');
+    } catch (err) {
+      setFeedbackStatus(err instanceof Error ? err.message : 'Unable to submit feedback.');
+    } finally {
+      setFeedbackSubmitting(false);
     }
   };
 
@@ -197,7 +266,7 @@ function App() {
         <section className="panel login-panel">
           <p className="eyebrow">Campus Canteen</p>
           <h1>Food Management System</h1>
-          <p className="subtitle">Student/Admin Login</p>
+          <p className="subtitle">Secure student/admin login</p>
           <form className="login-form" onSubmit={handleLogin}>
             <label htmlFor="username">Username</label>
             <input
@@ -220,7 +289,6 @@ function App() {
               {loginLoading ? 'Logging in...' : 'Login'}
             </button>
           </form>
-          <p className="subtitle">Use backend users, e.g. `student` / `student123`, `admin` / `admin123`.</p>
           {loginError && <p className="error">{loginError}</p>}
         </section>
       </main>
@@ -235,13 +303,13 @@ function App() {
             <div>
               <p className="eyebrow">Student Portal</p>
               <h1>Today Food Menus</h1>
-              <p className="subtitle">Date: {todayDate}</p>
+              <p className="subtitle">Welcome, {currentUser}. Date: {todayDate}</p>
             </div>
             <div className="header-actions">
               <button className="refresh-button" onClick={loadItems} disabled={loading}>
                 {loading ? 'Refreshing...' : 'Refresh'}
               </button>
-              <button className="ghost-button" onClick={() => setRole(null)}>
+              <button className="ghost-button" onClick={handleLogout}>
                 Logout
               </button>
             </div>
@@ -253,6 +321,24 @@ function App() {
             {renderMenuTable('Morning', todayMenus.morning)}
             {renderMenuTable('Lunch', todayMenus.lunch)}
             {renderMenuTable('Dinner', todayMenus.dinner)}
+          </section>
+
+          <section className="feedback-card">
+            <h3>Share Feedback</h3>
+            <p className="subtitle">Your feedback is visible only on the admin page.</p>
+            <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
+              <textarea
+                value={feedbackMessage}
+                onChange={(event) => setFeedbackMessage(event.target.value)}
+                placeholder="Share your suggestions about today's food menu..."
+                minLength={3}
+                required
+              />
+              <button type="submit" disabled={feedbackSubmitting}>
+                {feedbackSubmitting ? 'Submitting...' : 'Submit Feedback'}
+              </button>
+            </form>
+            {feedbackStatus && <p className="status-text">{feedbackStatus}</p>}
           </section>
         </section>
       </main>
@@ -266,13 +352,13 @@ function App() {
           <div>
             <p className="eyebrow">Admin Portal</p>
             <h1>History of Food Items</h1>
-            <p className="subtitle">Manage menu entries and review full history.</p>
+            <p className="subtitle">Manage menu entries and monitor student feedback.</p>
           </div>
           <div className="header-actions">
-            <button className="refresh-button" onClick={loadItems} disabled={loading || submitting}>
+            <button className="refresh-button" onClick={() => { loadItems(); loadFeedbacks(); }} disabled={loading || submitting}>
               {loading ? 'Refreshing...' : 'Refresh'}
             </button>
-            <button className="ghost-button" onClick={() => setRole(null)}>
+            <button className="ghost-button" onClick={handleLogout}>
               Logout
             </button>
           </div>
@@ -280,7 +366,7 @@ function App() {
 
         <section className="stats-grid">
           <article className="stat-card">
-            <p>Total Records</p>
+            <p>Total Food Records</p>
             <strong>{items.length}</strong>
           </article>
           <article className="stat-card">
@@ -288,8 +374,8 @@ function App() {
             <strong>{totalQuantity}</strong>
           </article>
           <article className="stat-card">
-            <p>Updated</p>
-            <strong>{lastUpdated || 'Not yet'}</strong>
+            <p>Total Feedbacks</p>
+            <strong>{feedbacks.length}</strong>
           </article>
         </section>
 
@@ -335,6 +421,7 @@ function App() {
         {error && <p className="error">{error}</p>}
 
         <section className="history-table">
+          <h3>Food Item History</h3>
           <table>
             <thead>
               <tr>
@@ -355,9 +442,31 @@ function App() {
               ))}
             </tbody>
           </table>
-          {!loading && sortedHistory.length === 0 && (
-            <p className="empty">No history found.</p>
-          )}
+          {!loading && sortedHistory.length === 0 && <p className="empty">No history found.</p>}
+        </section>
+
+        <section className="history-table">
+          <h3>Submitted Feedbacks</h3>
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Feedback</th>
+                <th>Submitted At</th>
+              </tr>
+            </thead>
+            <tbody>
+              {feedbacks.map((item) => (
+                <tr key={item.id}>
+                  <td>{item.student_name}</td>
+                  <td>{item.message}</td>
+                  <td>{new Date(item.created_at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {feedbacks.length === 0 && <p className="empty">No feedback submitted yet.</p>}
+          <p className="updated">Updated: {lastUpdated || 'Not yet'}</p>
         </section>
       </section>
     </main>

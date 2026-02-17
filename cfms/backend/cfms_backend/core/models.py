@@ -12,3 +12,15 @@ class FoodItem(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.category})"
+
+
+class Feedback(models.Model):
+    student_name = models.CharField(max_length=150)
+    message = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self) -> str:
+        return f"{self.student_name}: {self.message[:40]}"
