@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+from django.core.management.utils import get_random_secret_key
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -28,7 +29,7 @@ def env_bool(name: str, default: bool) -> bool:
 
 SECRET_KEY = os.getenv(
     'SECRET_KEY',
-    'django-insecure-j*gi-2-#ud5n1@h5$wp(z&b*cv@g4n-s57e6fni)_cru54!z5a',
+    get_random_secret_key(),
 )
 
 DEBUG = env_bool('DEBUG', False)
@@ -160,5 +161,15 @@ STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
 STATICFILES_DIRS = [BASE_DIR / 'static']
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+MEDIA_URL = '/media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.console.EmailBackend')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'localhost')
+EMAIL_PORT = int(os.getenv('EMAIL_PORT', '25'))
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_USE_TLS = env_bool('EMAIL_USE_TLS', False)
+EMAIL_USE_SSL = env_bool('EMAIL_USE_SSL', False)
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'

@@ -1,156 +1,421 @@
+import csv
+import io
 import json
+import os
+from datetime import datetime
 
+import requests
 from django.contrib.auth import authenticate, login
-from django.http import JsonResponse
+from django.core.mail import send_mail
+from django.db.models import Avg, Count, Q
+from django.http import HttpResponse, JsonResponse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
+
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
 
 from .models import Feedback, FoodItem
 
 
-def _cors(response: JsonResponse) -> JsonResponse:
-    response['Access-Control-Allow-Origin'] = '*'
+LOW_STOCK_THRESHOLD = int(os.getenv('LOW_STOCK_THRESHOLD', '5'))
+
+
+def _cors(response: HttpResponse, request=None) -> HttpResponse:
+    origin = request.headers.get('Origin') if request else None
+    response['Access-Control-Allow-Origin'] = origin or '*'
     response['Access-Control-Allow-Headers'] = 'Content-Type'
     response['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
+    response['Access-Control-Allow-Credentials'] = 'true'
     return response
 
 
-@csrf_exempt
-def food_items(request):
-    if request.method == 'OPTIONS':
-        return _cors(JsonResponse({}, status=200))
+def _json_error(message: str, status: int, request=None) -> JsonResponse:
+    return _cors(JsonResponse({'error': message}, status=status), request)
 
-    if request.method == 'GET':
-        items = [
-            {
-                'id': item.id,
-                'name': item.name,
-                'category': item.category,
-                'quantity': item.quantity,
-                'created_at': item.created_at.isoformat(),
-            }
-            for item in FoodItem.objects.all()
-        ]
-        return _cors(JsonResponse({'items': items}))
 
-    if request.method == 'POST':
-        try:
-            payload = json.loads(request.body.decode('utf-8'))
-        except (json.JSONDecodeError, UnicodeDecodeError):
-            return _cors(JsonResponse({'error': 'Invalid JSON body.'}, status=400))
+def _is_admin(user) -> bool:
+    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser))
 
-        name = str(payload.get('name', '')).strip()
-        category = str(payload.get('category', '')).strip()
-        quantity = payload.get('quantity', 1)
 
-        if not name:
-            return _cors(JsonResponse({'error': 'Name is required.'}, status=400))
-        if not category:
-            return _cors(JsonResponse({'error': 'Category is required.'}, status=400))
+def _parse_date(value: str):
+    try:
+        return datetime.strptime(value, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
 
-        try:
-            quantity = int(quantity)
-        except (TypeError, ValueError):
-            return _cors(JsonResponse({'error': 'Quantity must be a number.'}, status=400))
 
-        if quantity < 1:
-            return _cors(JsonResponse({'error': 'Quantity must be at least 1.'}, status=400))
+def _serialize_food_item(item: FoodItem, request) -> dict:
+    image_url = request.build_absolute_uri(item.image.url) if item.image else ''
+    return {
+        'id': item.id,
+        'name': item.name,
+        'category': item.category,
+        'quantity': item.quantity,
+        'image_url': image_url,
+        'created_at': item.created_at.isoformat(),
+    }
 
-        item = FoodItem.objects.create(name=name, category=category, quantity=quantity)
-        return _cors(
-            JsonResponse(
-                {
-                    'id': item.id,
-                    'name': item.name,
-                    'category': item.category,
-                    'quantity': item.quantity,
-                    'created_at': item.created_at.isoformat(),
-                },
-                status=201,
-            )
+
+def _serialize_feedback(item: Feedback) -> dict:
+    return {
+        'id': item.id,
+        'student_name': item.student_name,
+        'food_item_id': item.food_item_id,
+        'food_item_name': item.food_item.name if item.food_item else '',
+        'rating': item.rating,
+        'message': item.message,
+        'created_at': item.created_at.isoformat(),
+    }
+
+
+def _apply_food_filters(request, queryset):
+    search = request.GET.get('search', '').strip()
+    category = request.GET.get('category', '').strip().lower()
+    date_from = _parse_date(request.GET.get('date_from', '').strip())
+    date_to = _parse_date(request.GET.get('date_to', '').strip())
+
+    if search:
+        queryset = queryset.filter(Q(name__icontains=search) | Q(category__icontains=search))
+    if category:
+        queryset = queryset.filter(category__iexact=category)
+    if date_from:
+        queryset = queryset.filter(created_at__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__date__lte=date_to)
+
+    return queryset
+
+
+def _apply_feedback_filters(request, queryset):
+    search = request.GET.get('search', '').strip()
+    category = request.GET.get('category', '').strip().lower()
+    date_from = _parse_date(request.GET.get('date_from', '').strip())
+    date_to = _parse_date(request.GET.get('date_to', '').strip())
+
+    if search:
+        queryset = queryset.filter(
+            Q(student_name__icontains=search)
+            | Q(message__icontains=search)
+            | Q(food_item__name__icontains=search)
         )
+    if category:
+        queryset = queryset.filter(food_item__category__iexact=category)
+    if date_from:
+        queryset = queryset.filter(created_at__date__gte=date_from)
+    if date_to:
+        queryset = queryset.filter(created_at__date__lte=date_to)
 
-    return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))
+    return queryset
+
+
+def _notify(message: str) -> None:
+    notify_email_to = os.getenv('NOTIFY_EMAIL_TO', '').strip()
+    if notify_email_to:
+        recipients = [item.strip() for item in notify_email_to.split(',') if item.strip()]
+        if recipients:
+            send_mail(
+                subject='CFMS Alert',
+                message=message,
+                from_email=os.getenv('EMAIL_FROM', 'noreply@cfms.local'),
+                recipient_list=recipients,
+                fail_silently=True,
+            )
+
+    whatsapp_webhook = os.getenv('WHATSAPP_WEBHOOK_URL', '').strip()
+    if whatsapp_webhook:
+        try:
+            requests.post(whatsapp_webhook, json={'message': message}, timeout=5)
+        except requests.RequestException:
+            pass
 
 
 @csrf_exempt
 def auth_login(request):
     if request.method == 'OPTIONS':
-        return _cors(JsonResponse({}, status=200))
+        return _cors(JsonResponse({}, status=200), request)
 
     if request.method != 'POST':
-        return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))
+        return _json_error('Method not allowed.', 405, request)
 
     try:
         payload = json.loads(request.body.decode('utf-8'))
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return _cors(JsonResponse({'error': 'Invalid JSON body.'}, status=400))
+        return _json_error('Invalid JSON body.', 400, request)
 
     username = str(payload.get('username', '')).strip()
     password = str(payload.get('password', ''))
 
     if not username or not password:
-        return _cors(JsonResponse({'error': 'Username and password are required.'}, status=400))
+        return _json_error('Username and password are required.', 400, request)
 
     user = authenticate(request, username=username, password=password)
     if not user:
-        return _cors(JsonResponse({'error': 'Invalid credentials.'}, status=401))
+        return _json_error('Invalid credentials.', 401, request)
 
     if not user.is_active:
-        return _cors(JsonResponse({'error': 'This account is inactive.'}, status=403))
+        return _json_error('This account is inactive.', 403, request)
 
     login(request, user)
-    role = 'admin' if user.is_staff or user.is_superuser else 'student'
-    return _cors(JsonResponse({'username': user.username, 'role': role}, status=200))
+    role = 'admin' if _is_admin(user) else 'student'
+    return _cors(JsonResponse({'username': user.username, 'role': role}, status=200), request)
+
+
+@csrf_exempt
+def food_items(request):
+    if request.method == 'OPTIONS':
+        return _cors(JsonResponse({}, status=200), request)
+
+    if request.method == 'GET':
+        queryset = _apply_food_filters(request, FoodItem.objects.all())
+        items = [_serialize_food_item(item, request) for item in queryset]
+        return _cors(JsonResponse({'items': items}), request)
+
+    if request.method == 'POST':
+        if not _is_admin(request.user):
+            return _json_error('Admin access required.', 403, request)
+
+        content_type = request.headers.get('Content-Type', '')
+        if content_type.startswith('multipart/form-data'):
+            source = request.POST
+            image = request.FILES.get('image')
+        else:
+            image = None
+            try:
+                source = json.loads(request.body.decode('utf-8'))
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                return _json_error('Invalid request body.', 400, request)
+
+        name = str(source.get('name', '')).strip()
+        category = str(source.get('category', '')).strip().lower()
+        quantity = source.get('quantity', 1)
+
+        if not name:
+            return _json_error('Name is required.', 400, request)
+        if category not in ('morning', 'lunch', 'dinner'):
+            return _json_error('Category must be morning, lunch, or dinner.', 400, request)
+
+        try:
+            quantity = int(quantity)
+        except (TypeError, ValueError):
+            return _json_error('Quantity must be a number.', 400, request)
+
+        if quantity < 1:
+            return _json_error('Quantity must be at least 1.', 400, request)
+
+        item = FoodItem.objects.create(
+            name=name,
+            category=category,
+            quantity=quantity,
+            image=image,
+        )
+
+        _notify(f'New menu item published: {item.name} ({item.category}) qty={item.quantity}.')
+        if item.quantity <= LOW_STOCK_THRESHOLD:
+            _notify(f'Low stock alert: {item.name} has quantity {item.quantity}.')
+
+        return _cors(JsonResponse(_serialize_food_item(item, request), status=201), request)
+
+    return _json_error('Method not allowed.', 405, request)
 
 
 @csrf_exempt
 def feedback_items(request):
     if request.method == 'OPTIONS':
-        return _cors(JsonResponse({}, status=200))
+        return _cors(JsonResponse({}, status=200), request)
 
     if not request.user.is_authenticated:
-        return _cors(JsonResponse({'error': 'Authentication required.'}, status=401))
+        return _json_error('Authentication required.', 401, request)
 
     if request.method == 'GET':
-        if not (request.user.is_staff or request.user.is_superuser):
-            return _cors(JsonResponse({'error': 'Admin access required.'}, status=403))
+        if not _is_admin(request.user):
+            return _json_error('Admin access required.', 403, request)
 
-        feedbacks = [
-            {
-                'id': feedback.id,
-                'student_name': feedback.student_name,
-                'message': feedback.message,
-                'created_at': feedback.created_at.isoformat(),
-            }
-            for feedback in Feedback.objects.all()
-        ]
-        return _cors(JsonResponse({'feedbacks': feedbacks}))
+        queryset = _apply_feedback_filters(request, Feedback.objects.select_related('food_item').all())
+        feedbacks = [_serialize_feedback(item) for item in queryset]
+        return _cors(JsonResponse({'feedbacks': feedbacks}), request)
 
     if request.method == 'POST':
         try:
             payload = json.loads(request.body.decode('utf-8'))
         except (json.JSONDecodeError, UnicodeDecodeError):
-            return _cors(JsonResponse({'error': 'Invalid JSON body.'}, status=400))
+            return _json_error('Invalid JSON body.', 400, request)
 
         message = str(payload.get('message', '')).strip()
+        rating = payload.get('rating')
+        food_item_id = payload.get('food_item_id')
+
         if not message:
-            return _cors(JsonResponse({'error': 'Feedback message is required.'}, status=400))
+            return _json_error('Feedback message is required.', 400, request)
+
+        try:
+            rating = int(rating)
+        except (TypeError, ValueError):
+            return _json_error('Rating must be a number from 1 to 5.', 400, request)
+
+        if rating < 1 or rating > 5:
+            return _json_error('Rating must be between 1 and 5.', 400, request)
+
+        food_item = None
+        if food_item_id:
+            try:
+                food_item = FoodItem.objects.get(id=int(food_item_id))
+            except (FoodItem.DoesNotExist, TypeError, ValueError):
+                return _json_error('Selected food item is invalid.', 400, request)
 
         feedback = Feedback.objects.create(
             student_name=request.user.username,
+            food_item=food_item,
+            rating=rating,
             message=message,
         )
 
-        return _cors(
-            JsonResponse(
-                {
-                    'id': feedback.id,
-                    'student_name': feedback.student_name,
-                    'message': feedback.message,
-                    'created_at': feedback.created_at.isoformat(),
-                },
-                status=201,
-            )
-        )
+        return _cors(JsonResponse(_serialize_feedback(feedback), status=201), request)
 
-    return _cors(JsonResponse({'error': 'Method not allowed.'}, status=405))
+    return _json_error('Method not allowed.', 405, request)
+
+
+@csrf_exempt
+def feedback_analytics(request):
+    if request.method == 'OPTIONS':
+        return _cors(JsonResponse({}, status=200), request)
+
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    queryset = Feedback.objects.select_related('food_item').filter(food_item__isnull=False)
+    queryset = _apply_feedback_filters(request, queryset)
+
+    top_rated = list(
+        queryset.values('food_item__name')
+        .annotate(avg_rating=Avg('rating'), count=Count('id'))
+        .order_by('-avg_rating', '-count')[:8]
+    )
+
+    distribution = {
+        '1': queryset.filter(rating=1).count(),
+        '2': queryset.filter(rating=2).count(),
+        '3': queryset.filter(rating=3).count(),
+        '4': queryset.filter(rating=4).count(),
+        '5': queryset.filter(rating=5).count(),
+    }
+
+    payload = {
+        'top_rated': [
+            {
+                'food_name': item['food_item__name'],
+                'avg_rating': round(float(item['avg_rating']), 2),
+                'count': item['count'],
+            }
+            for item in top_rated
+        ],
+        'rating_distribution': distribution,
+    }
+    return _cors(JsonResponse(payload), request)
+
+
+def _csv_response(filename: str, rows, headers):
+    response = HttpResponse(content_type='text/csv')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    writer = csv.writer(response)
+    writer.writerow(headers)
+    for row in rows:
+        writer.writerow(row)
+    return response
+
+
+def _pdf_response(title: str, filename: str, lines):
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    y = height - 40
+
+    pdf.setFont('Helvetica-Bold', 14)
+    pdf.drawString(40, y, title)
+    y -= 24
+
+    pdf.setFont('Helvetica', 9)
+    for line in lines:
+        if y <= 40:
+            pdf.showPage()
+            pdf.setFont('Helvetica', 9)
+            y = height - 40
+        pdf.drawString(40, y, line[:130])
+        y -= 14
+
+    pdf.save()
+    buffer.seek(0)
+    response = HttpResponse(buffer.read(), content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="{filename}"'
+    return response
+
+
+@csrf_exempt
+def export_food_csv(request):
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    queryset = _apply_food_filters(request, FoodItem.objects.all())
+    rows = [
+        [item.name, item.category, item.quantity, timezone.localtime(item.created_at).strftime('%Y-%m-%d %H:%M')]
+        for item in queryset
+    ]
+    return _cors(
+        _csv_response('food_history.csv', rows, ['Food Name', 'Session', 'Quantity', 'Created At']),
+        request,
+    )
+
+
+@csrf_exempt
+def export_feedback_csv(request):
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    queryset = _apply_feedback_filters(request, Feedback.objects.select_related('food_item').all())
+    rows = [
+        [
+            item.student_name,
+            item.food_item.name if item.food_item else '',
+            item.rating,
+            item.message,
+            timezone.localtime(item.created_at).strftime('%Y-%m-%d %H:%M'),
+        ]
+        for item in queryset
+    ]
+    return _cors(
+        _csv_response(
+            'feedback_history.csv',
+            rows,
+            ['Student', 'Food Item', 'Rating', 'Feedback', 'Submitted At'],
+        ),
+        request,
+    )
+
+
+@csrf_exempt
+def export_food_pdf(request):
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    queryset = _apply_food_filters(request, FoodItem.objects.all())
+    lines = [
+        f"{item.name} | {item.category} | qty={item.quantity} | {timezone.localtime(item.created_at).strftime('%Y-%m-%d %H:%M')}"
+        for item in queryset
+    ] or ['No food history found.']
+    return _cors(_pdf_response('Food History Report', 'food_history.pdf', lines), request)
+
+
+@csrf_exempt
+def export_feedback_pdf(request):
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    queryset = _apply_feedback_filters(request, Feedback.objects.select_related('food_item').all())
+    lines = [
+        (
+            f"{item.student_name} | {item.food_item.name if item.food_item else 'N/A'} "
+            f"| rating={item.rating} | {item.message} | {timezone.localtime(item.created_at).strftime('%Y-%m-%d %H:%M')}"
+        )
+        for item in queryset
+    ] or ['No feedback history found.']
+    return _cors(_pdf_response('Feedback Report', 'feedback_history.pdf', lines), request)
