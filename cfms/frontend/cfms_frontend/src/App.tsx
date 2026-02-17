@@ -24,6 +24,19 @@ const FOOD_URL = `${NORMALIZED_BASE_URL}/api/food-items/`;
 const LOGIN_URL = `${NORMALIZED_BASE_URL}/api/auth/login/`;
 const FEEDBACK_URL = `${NORMALIZED_BASE_URL}/api/feedback/`;
 
+const FOOD_IMAGE_MAP: Array<{ keywords: string[]; image: string }> = [
+  { keywords: ['rice'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f35a.png' },
+  { keywords: ['dal', 'sambar', 'curry'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f35b.png' },
+  { keywords: ['idli', 'dosa', 'chapati', 'roti', 'bread'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f35e.png' },
+  { keywords: ['milk'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f95b.png' },
+  { keywords: ['apple'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f34e.png' },
+  { keywords: ['banana'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f34c.png' },
+  { keywords: ['egg'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f95a.png' },
+  { keywords: ['chicken'], image: 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f357.png' },
+];
+
+const DEFAULT_FOOD_IMAGE = 'https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72/1f372.png';
+
 const readJsonSafely = async (response: Response): Promise<any | null> => {
   const text = await response.text();
   if (!text) {
@@ -35,6 +48,14 @@ const readJsonSafely = async (response: Response): Promise<any | null> => {
   } catch {
     return null;
   }
+};
+
+const getFoodImage = (foodName: string): string => {
+  const normalized = foodName.trim().toLowerCase();
+  const match = FOOD_IMAGE_MAP.find((item) =>
+    item.keywords.some((keyword) => normalized.includes(keyword))
+  );
+  return match?.image ?? DEFAULT_FOOD_IMAGE;
 };
 
 function App() {
@@ -250,7 +271,17 @@ function App() {
           <tbody>
             {menuItems.map((item) => (
               <tr key={item.id}>
-                <td>{item.name}</td>
+                <td>
+                  <div className="food-cell">
+                    <img
+                      className="food-thumb"
+                      src={getFoodImage(item.name)}
+                      alt={item.name}
+                      loading="lazy"
+                    />
+                    <span>{item.name}</span>
+                  </div>
+                </td>
                 <td>{item.quantity}</td>
               </tr>
             ))}
@@ -434,7 +465,17 @@ function App() {
             <tbody>
               {sortedHistory.map((item) => (
                 <tr key={item.id}>
-                  <td>{item.name}</td>
+                  <td>
+                    <div className="food-cell">
+                      <img
+                        className="food-thumb"
+                        src={getFoodImage(item.name)}
+                        alt={item.name}
+                        loading="lazy"
+                      />
+                      <span>{item.name}</span>
+                    </div>
+                  </td>
                   <td>{item.category}</td>
                   <td>{item.quantity}</td>
                   <td>{new Date(item.created_at).toLocaleString()}</td>
