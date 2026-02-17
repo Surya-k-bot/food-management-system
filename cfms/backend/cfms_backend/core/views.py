@@ -6,6 +6,7 @@ from datetime import datetime
 
 import requests
 from django.contrib.auth import authenticate, login
+from django.contrib.auth import get_user_model
 from django.core.mail import send_mail
 from django.db.models import Avg, Count, Q
 from django.http import HttpResponse, JsonResponse
@@ -144,10 +145,23 @@ def auth_login(request):
         return _json_error('Invalid JSON body.', 400, request)
 
     username = str(payload.get('username', '')).strip()
+    email = str(payload.get('email', '')).strip()
     password = str(payload.get('password', ''))
+    requested_role = str(payload.get('role', '')).strip().lower()
 
-    if not username or not password:
-        return _json_error('Username and password are required.', 400, request)
+    if requested_role and requested_role not in ('student', 'admin'):
+        return _json_error('Role must be student or admin.', 400, request)
+
+    if not password:
+        return _json_error('Password is required.', 400, request)
+
+    if email:
+        user_model = get_user_model()
+        matched_user = user_model.objects.filter(email__iexact=email).first()
+        username = matched_user.username if matched_user else ''
+
+    if not username:
+        return _json_error('Email/username is required.', 400, request)
 
     user = authenticate(request, username=username, password=password)
     if not user:
@@ -156,8 +170,11 @@ def auth_login(request):
     if not user.is_active:
         return _json_error('This account is inactive.', 403, request)
 
-    login(request, user)
     role = 'admin' if _is_admin(user) else 'student'
+    if requested_role and role != requested_role:
+        return _json_error(f'This account is not allowed for {requested_role} login.', 403, request)
+
+    login(request, user)
     return _cors(JsonResponse({'username': user.username, 'role': role}, status=200), request)
 
 

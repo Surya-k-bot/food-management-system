@@ -111,7 +111,8 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState<string>('');
 
   const [role, setRole] = useState<UserRole | null>(null);
-  const [username, setUsername] = useState('');
+  const [selectedLoginRole, setSelectedLoginRole] = useState<UserRole>('student');
+  const [loginEmail, setLoginEmail] = useState('');
   const [password, setPassword] = useState('');
   const [currentUser, setCurrentUser] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -185,7 +186,11 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ username: username.trim(), password }),
+        body: JSON.stringify({
+          email: loginEmail.trim(),
+          password,
+          role: selectedLoginRole,
+        }),
       });
       const data = await readJsonSafely(response);
       if (!response.ok) {
@@ -198,7 +203,7 @@ function App() {
         throw new Error('Invalid login response from backend.');
       }
       setRole(data.role as UserRole);
-      setCurrentUser(data.username ?? username.trim());
+      setCurrentUser(data.username ?? loginEmail.trim());
       setPassword('');
     } catch (err) {
       setLoginError(err instanceof Error ? err.message : 'Unexpected login error.');
@@ -331,9 +336,32 @@ function App() {
           <p className="eyebrow">Campus Canteen</p>
           <h1>Food Management System</h1>
           <p className="subtitle">Secure student/admin login</p>
+          <div className="login-role-toggle">
+            <button
+              type="button"
+              className={selectedLoginRole === 'student' ? 'active' : ''}
+              onClick={() => setSelectedLoginRole('student')}
+            >
+              Student Login
+            </button>
+            <button
+              type="button"
+              className={selectedLoginRole === 'admin' ? 'active' : ''}
+              onClick={() => setSelectedLoginRole('admin')}
+            >
+              Admin Login
+            </button>
+          </div>
           <form className="login-form" onSubmit={handleLogin}>
-            <label htmlFor="username">Username</label>
-            <input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+            <label htmlFor="email">Email</label>
+            <input
+              id="email"
+              type="email"
+              value={loginEmail}
+              onChange={(e) => setLoginEmail(e.target.value)}
+              placeholder={selectedLoginRole === 'admin' ? 'admin@example.com' : 'student@example.com'}
+              required
+            />
             <label htmlFor="password">Password</label>
             <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             <button type="submit" disabled={loginLoading}>{loginLoading ? 'Logging in...' : 'Login'}</button>

@@ -51,6 +51,25 @@ h4 { margin: 0 0 8px; color: var(--muted); }
 
 .login-form { display: grid; gap: 8px; margin-top: 18px; }
 
+.login-role-toggle {
+  margin-top: 14px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.login-role-toggle button {
+  background: #fff;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.login-role-toggle button.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+}
+
 label { color: var(--muted); font-size: 0.86rem; font-weight: 600; }
 
 input, select, button, textarea, a {
