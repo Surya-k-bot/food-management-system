@@ -2,6 +2,8 @@ import csv
 import io
 import json
 import os
+import re
+import uuid
 from datetime import datetime
 
 import requests
@@ -131,6 +133,56 @@ def _notify(message: str) -> None:
             pass
 
 
+def _notify_students_menu_update(item: FoodItem) -> None:
+    user_model = get_user_model()
+    student_emails = list(
+        user_model.objects.filter(
+            is_active=True,
+            is_staff=False,
+            is_superuser=False,
+            email__isnull=False,
+        )
+        .exclude(email='')
+        .values_list('email', flat=True)
+    )
+    if not student_emails:
+        return
+
+    meal = item.category.capitalize()
+    subject = f'{meal} Menu Update'
+    message = (
+        f'Hello Student,\n\n'
+        f'Your {item.category} menu is ready.\n'
+        f'Item: {item.name}\n'
+        f'Quantity: {item.quantity}\n\n'
+        f'- CFMS'
+    )
+    send_mail(
+        subject=subject,
+        message=message,
+        from_email=os.getenv('EMAIL_FROM', 'noreply@cfms.local'),
+        recipient_list=student_emails,
+        fail_silently=True,
+    )
+
+
+def _build_unique_username(email: str) -> str:
+    user_model = get_user_model()
+    local_part = email.split('@', 1)[0].strip().lower()
+    base = re.sub(r'[^a-z0-9_]+', '_', local_part).strip('_') or 'student'
+    candidate = base[:30]
+    suffix = 1
+    while user_model.objects.filter(username=candidate).exists():
+        trailer = f"_{suffix}"
+        candidate = f"{base[:max(1, 30 - len(trailer))]}{trailer}"
+        suffix += 1
+        if suffix > 999:
+            candidate = f"user_{uuid.uuid4().hex[:8]}"
+            if not user_model.objects.filter(username=candidate).exists():
+                break
+    return candidate
+
+
 @csrf_exempt
 def auth_login(request):
     if request.method == 'OPTIONS':
@@ -152,16 +204,34 @@ def auth_login(request):
     if requested_role and requested_role not in ('student', 'admin'):
         return _json_error('Role must be student or admin.', 400, request)
 
+    if not email and not username:
+        return _json_error('Email is required.', 400, request)
     if not password:
         return _json_error('Password is required.', 400, request)
 
+    user = None
     if email:
         user_model = get_user_model()
         matched_user = user_model.objects.filter(email__iexact=email).first()
-        username = matched_user.username if matched_user else ''
-
-    if not username:
-        return _json_error('Email/username is required.', 400, request)
+        if matched_user:
+            username = matched_user.username
+        elif requested_role == 'student':
+            username = _build_unique_username(email)
+            created_user = user_model.objects.create_user(
+                username=username,
+                email=email,
+                password=password,
+            )
+            login(request, created_user)
+            return _cors(
+                JsonResponse(
+                    {'username': created_user.username, 'role': 'student', 'new_user': True},
+                    status=200,
+                ),
+                request,
+            )
+        else:
+            return _json_error('Admin account not found. Ask existing admin to create it.', 401, request)
 
     user = authenticate(request, username=username, password=password)
     if not user:
@@ -228,6 +298,7 @@ def food_items(request):
         )
 
         _notify(f'New menu item published: {item.name} ({item.category}) qty={item.quantity}.')
+        _notify_students_menu_update(item)
         if item.quantity <= LOW_STOCK_THRESHOLD:
             _notify(f'Low stock alert: {item.name} has quantity {item.quantity}.')
 

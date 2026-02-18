@@ -333,6 +333,14 @@ function App() {
     return (
       <main className="app-shell">
         <section className="panel login-panel">
+          <img
+            src="/ksr-logo.png"
+            alt="KSR Institute of Engineering and Technology"
+            className="home-logo"
+            onError={(event) => {
+              event.currentTarget.src = '/logo192.png';
+            }}
+          />
           <p className="eyebrow">Campus Canteen</p>
           <h1>Food Management System</h1>
           <p className="subtitle">Secure student/admin login</p>

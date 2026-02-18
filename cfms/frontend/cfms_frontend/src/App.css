@@ -31,6 +31,12 @@
 }
 
 .login-panel { width: min(520px, 100%); }
+.home-logo {
+  width: 150px;
+  height: auto;
+  display: block;
+  margin-bottom: 10px;
+}
 
 .panel-header { display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; }
 .header-actions { display: flex; gap: 10px; }
