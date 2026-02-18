@@ -133,7 +133,7 @@ def _notify(message: str) -> None:
             pass
 
 
-def _notify_students_menu_update(item: FoodItem) -> None:
+def _notify_students_menu_update(item: FoodItem, action: str = 'added') -> None:
     user_model = get_user_model()
     student_emails = list(
         user_model.objects.filter(
@@ -152,7 +152,8 @@ def _notify_students_menu_update(item: FoodItem) -> None:
     subject = f'{meal} Menu Update'
     message = (
         f'Hello Student,\n\n'
-        f'Your {item.category} menu is ready.\n'
+        f'Your {item.category} is ready.\n'
+        f'Admin has {action} the menu item.\n'
         f'Item: {item.name}\n'
         f'Quantity: {item.quantity}\n\n'
         f'- CFMS'
@@ -298,13 +299,70 @@ def food_items(request):
         )
 
         _notify(f'New menu item published: {item.name} ({item.category}) qty={item.quantity}.')
-        _notify_students_menu_update(item)
+        _notify_students_menu_update(item, action='added')
         if item.quantity <= LOW_STOCK_THRESHOLD:
             _notify(f'Low stock alert: {item.name} has quantity {item.quantity}.')
 
         return _cors(JsonResponse(_serialize_food_item(item, request), status=201), request)
 
     return _json_error('Method not allowed.', 405, request)
+
+
+@csrf_exempt
+def food_item_detail(request, item_id: int):
+    if request.method == 'OPTIONS':
+        return _cors(JsonResponse({}, status=200), request)
+
+    if not _is_admin(request.user):
+        return _json_error('Admin access required.', 403, request)
+
+    try:
+        item = FoodItem.objects.get(id=item_id)
+    except FoodItem.DoesNotExist:
+        return _json_error('Food item not found.', 404, request)
+
+    if request.method not in ('PUT', 'PATCH'):
+        return _json_error('Method not allowed.', 405, request)
+
+    content_type = request.headers.get('Content-Type', '')
+    if content_type.startswith('multipart/form-data'):
+        source = request.POST
+        image = request.FILES.get('image')
+    else:
+        image = None
+        try:
+            source = json.loads(request.body.decode('utf-8'))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return _json_error('Invalid request body.', 400, request)
+
+    name = str(source.get('name', item.name)).strip()
+    category = str(source.get('category', item.category)).strip().lower()
+    quantity = source.get('quantity', item.quantity)
+
+    if not name:
+        return _json_error('Name is required.', 400, request)
+    if category not in ('morning', 'lunch', 'dinner'):
+        return _json_error('Category must be morning, lunch, or dinner.', 400, request)
+    try:
+        quantity = int(quantity)
+    except (TypeError, ValueError):
+        return _json_error('Quantity must be a number.', 400, request)
+    if quantity < 1:
+        return _json_error('Quantity must be at least 1.', 400, request)
+
+    item.name = name
+    item.category = category
+    item.quantity = quantity
+    if image is not None:
+        item.image = image
+    item.save()
+
+    _notify(f'Menu item updated: {item.name} ({item.category}) qty={item.quantity}.')
+    _notify_students_menu_update(item, action='updated')
+    if item.quantity <= LOW_STOCK_THRESHOLD:
+        _notify(f'Low stock alert: {item.name} has quantity {item.quantity}.')
+
+    return _cors(JsonResponse(_serialize_food_item(item, request), status=200), request)
 
 
 @csrf_exempt
